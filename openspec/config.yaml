@@ -1,0 +1,102 @@
+schema: spec-driven
+
+context: |
+  Product: HiringIQ Assessment Runtime — the applicant-facing proctored assessment
+  system layered on top of the recruiter-facing platform shell (separate workspace
+  at /Users/jgrenard/workspace/projects/PluralSight-POC/).
+
+  This OpenSpec workspace covers everything the applicant interacts with from the
+  moment they click their magic-link invitation through completing the assessment,
+  PLUS the integrity instrumentation that captures behavioral signals during the
+  session, PLUS the post-session analyzer that produces the IntegritySummary the
+  recruiter reviews.
+
+  Sibling-workspace architecture (locked decision D-A1, captured in the platform
+  shell's thoughts/assessment-design-decisions.md): the runtime lives in its own
+  sibling directory because (a) the WS service has a fundamentally different
+  runtime model than the platform shell's request-driven Lambda APIs, (b) the
+  security posture differs — runtime handles untrusted candidate traffic and
+  biometric data, (c) the integrity workstream may be owned by different
+  engineers (potentially Pluralsight's team) long-term.
+
+  Locked tech stack (do not re-litigate inside proposals):
+  - Runtime: Node.js 26 (matches platform shell)
+  - Frontend: React 18+ on S3 + CloudFront (separate distribution from the
+    recruiter platform — different origin, different CSP, different cookie
+    boundary)
+  - Compute: AWS Lambda, end-to-end (D-SVC2 — promote individual services to
+    Fargate only when SSM-monitored thresholds justify it)
+  - Auth: shared Cognito user pool with the platform shell for org-level access
+    (recruiter dashboard); per-assessment magic-link JWT for applicant identity
+  - Data: DynamoDB tables in this workspace are runtime-specific (sessions,
+    ws_connections, audit_events). Cross-workspace reads use the platform-shell's
+    `hiringiq-pilot` table via shared access patterns documented per proposal.
+  - WS service: API Gateway WebSocket API → Lambda per message
+  - Storage: S3 for biometric artifacts (selfie, rrweb recordings) with KMS
+    encryption, 180-day lifecycle policy
+  - LLM: AWS Bedrock (analyzer service uses Nova Pro or Claude per cost/quality)
+  - IaC: Terraform (no CDK)
+  - Secrets: AWS Secrets Manager (Persona API key, magic-link signer) + SSM
+    Parameter Store (config, thresholds)
+  - Scheduler: EventBridge Scheduler (session timeout transitions, magic-link
+    expiry checks)
+
+  Service decomposition (locked D-SVC1):
+  - applicant-service: applicant profile, Persona integration, biometric storage
+  - assessment-service: session state machine, item delivery, grading
+  - telemetry-service: WS event ingestion, audit-log writes, rrweb upload
+  - analyzer-service: SQS-driven post-session integrity analysis
+
+  Brand / UI conventions:
+  - Material Design 3 patterns over Pluralsight brand tokens (same as platform shell)
+  - Primary action color: Pluralsight Magenta #EC008C
+  - Font: Montserrat
+  - Shared design tokens published as a private NPM package OR git-subtree from
+    the platform shell — sub-decision pending Q-A1, deferred until scaffolding
+    step in Phase 1
+
+  Multi-tenancy: every applicant + session record is scoped by org_id, matching
+  the platform shell's tenant-isolation model. Recruiter access to runtime
+  artifacts is gated by Cognito org_id claim.
+
+  Conventions:
+  - Conventional Commits (feat:, fix:, chore:, etc.)
+  - Feature branches; main is only merged when released to prod
+  - Pre-commit lint required (npm run lint, terraform fmt + validate)
+  - File-size ceiling: 600 lines per source file
+  - Test-driven where the framework supports it
+
+  Proposal apply order (canonical, 2026-06-11):
+  1. add-assessment-runtime-foundation
+     (runtime workspace scaffold + Lambda services + DDB tables + magic-link
+      validation + consent landing + Persona + device check + intro + assessment
+      interface + completion screen — baseline assessment delivery, no integrity
+      instrumentation beyond the platform shell's existing capture)
+  2. add-assessment-runtime-integrity
+     (WS telemetry pipeline + face-api.js + VAD + browser signals + rrweb capture
+      + biometric storage + post-session Bedrock analyzer)
+  3. add-recruiter-assessment-review
+     (recruiter dashboard additions: session detail, timeline scrubber w/ severity
+      bands, rrweb playback, raw audit-log viewer, recruiter access logging,
+      right-to-deletion flow — partly extends the platform-shell's React app)
+
+  Each phase delivers vertical end-to-end value. Phase 2 hard-depends on Phase 1
+  (uses sessions, WS, services). Phase 3 hard-depends on Phase 2 (displays
+  IntegritySummary + rrweb produced by Phase 2). They apply in strict order.
+
+  Cross-workspace coupling: Phase 3 touches the recruiter platform's React app
+  (in the platform-shell workspace at .../PluralSight-POC/apps/web/). That
+  proposal carries explicit notes about which files in the OTHER workspace it
+  modifies. The runtime workspace remains the OpenSpec owner of the integrity
+  capabilities; the platform-shell owns the recruiter-dashboard chrome.
+
+rules:
+  proposal:
+    - State the WHY before the WHAT — what user-visible problem this solves
+    - Include an explicit "Out of scope" section listing later proposals this defers to
+    - Flag every open question with a bold "**OPEN:**" prefix
+    - Reference relevant decisions from the platform-shell's thoughts/assessment-design-decisions.md by ID (e.g., D-P3, D-SM2) when the decision was made there
+  tasks:
+    - Each task is vertically sliced and independently verifiable
+    - Each task lists its acceptance check (test, command, or visible behavior)
+    - Surface dependencies on prior proposals AND on the platform-shell workspace explicitly
